@@ -2,3 +2,4 @@ Flask
 speechrecognition
 pydub
 gunicorn
+SpeechRecognition
