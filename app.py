@@ -16,51 +16,72 @@ def transcribe_audio():
         return jsonify({"error": "No audio file provided"}), 400
 
     audio_file = request.files["audio"]
+    wav_path = None
+    processed_chunks = []
+
     try:
-        # Save incoming file temporarily
+        # Save uploaded audio
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp:
             audio_file.save(temp.name)
             wav_path = temp.name
 
-        # Load audio with pydub and convert to mono
+        # Load and preprocess
         audio = AudioSegment.from_wav(wav_path).set_channels(1).set_frame_rate(16000)
 
-        # Split on silence - dynamic chunking
-        chunks = silence.split_on_silence(
+        # Initial silence-based split
+        primary_chunks = silence.split_on_silence(
             audio,
-            min_silence_len=1000,  # 1 sec silence as chunk separator
+            min_silence_len=1000,
             silence_thresh=audio.dBFS - 14,
             keep_silence=300
         )
 
-        if not chunks:
-            return jsonify({"error": "No speech detected. Audio may be silent or unclear."}), 400
+        # Filter out short chunks and re-split long ones (>30s)
+        for chunk in primary_chunks:
+            if len(chunk) < 1000:
+                continue  # Skip super short noise
 
+            if len(chunk) <= 30000:  # 30 sec max
+                processed_chunks.append(chunk)
+            else:
+                # Re-split overly long chunk into smaller ones (fallback)
+                sub_chunks = [chunk[i:i + 28000] for i in range(0, len(chunk), 28000)]
+                processed_chunks.extend(sub_chunks)
+
+        if not processed_chunks:
+            return jsonify({"error": "No valid speech detected after preprocessing."}), 400
+
+        # Transcribe each chunk
         recognizer = sr.Recognizer()
-        full_transcription = []
+        transcripts = []
 
-        for i, chunk in enumerate(chunks):
+        for i, chunk in enumerate(processed_chunks):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as chunk_file:
                 chunk.export(chunk_file.name, format="wav")
-                try:
-                    with sr.AudioFile(chunk_file.name) as source:
-                        audio_data = recognizer.record(source)
-                        text = recognizer.recognize_google(audio_data, language="kn-IN")
-                        full_transcription.append(text)
-                except sr.UnknownValueError:
-                    full_transcription.append("[Unrecognized]")
-                except sr.RequestError as e:
-                    return jsonify({"error": f"Google API error: {str(e)}"}), 500
-                finally:
-                    os.remove(chunk_file.name)
+                chunk_path = chunk_file.name
 
-        final_text = " ".join(full_transcription)
-        return jsonify({"transcript": final_text.strip()})
+            try:
+                with sr.AudioFile(chunk_path) as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                    audio_data = recognizer.record(source)
+
+                text = recognizer.recognize_google(audio_data, language="kn-IN")
+                transcripts.append(text)
+
+            except sr.UnknownValueError:
+                transcripts.append("[Unrecognized]")
+            except sr.RequestError as e:
+                return jsonify({"error": f"Google API error: {str(e)}"}), 500
+            finally:
+                os.remove(chunk_path)
+
+        final_transcript = " ".join(transcripts).strip()
+        return jsonify({"transcript": final_transcript})
 
     except Exception as ex:
         return jsonify({"error": f"Internal server error: {str(ex)}"}), 500
     finally:
-        if 'wav_path' in locals() and os.path.exists(wav_path):
+        if wav_path and os.path.exists(wav_path):
             os.remove(wav_path)
 
 if __name__ == "__main__":
