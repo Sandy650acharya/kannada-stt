@@ -20,38 +20,42 @@ def transcribe_audio():
     processed_chunks = []
 
     try:
-        # Save uploaded audio
+        # Step 1: Save uploaded audio temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp:
             audio_file.save(temp.name)
             wav_path = temp.name
 
-        # Load and preprocess
+        # Step 2: Load and normalize audio
         audio = AudioSegment.from_wav(wav_path).set_channels(1).set_frame_rate(16000)
 
-        # Initial silence-based split
+        # Step 3: Split on silence
         primary_chunks = silence.split_on_silence(
             audio,
-            min_silence_len=1000,
-            silence_thresh=audio.dBFS - 14,
-            keep_silence=300
+            min_silence_len=800,            # Lower to catch more natural pauses
+            silence_thresh=audio.dBFS - 14, # Adaptive threshold
+            keep_silence=300                # Add some context padding
         )
 
-        # Filter out short chunks and re-split long ones (>30s)
+        # Step 4: Merge small chunks into larger ones (~20-30s target)
+        current = AudioSegment.silent(duration=0)
         for chunk in primary_chunks:
             if len(chunk) < 1000:
-                continue  # Skip super short noise
+                continue  # skip tiny noises
 
-            if len(chunk) <= 30000:  # 30 sec max
-                processed_chunks.append(chunk)
+            if len(current) + len(chunk) <= 30000:
+                current += chunk
             else:
-                # Re-split overly long chunk into smaller ones (fallback)
-                sub_chunks = [chunk[i:i + 28000] for i in range(0, len(chunk), 28000)]
-                processed_chunks.extend(sub_chunks)
+                if len(current) > 1000:
+                    processed_chunks.append(current)
+                current = chunk
+
+        if len(current) > 1000:
+            processed_chunks.append(current)
 
         if not processed_chunks:
-            return jsonify({"error": "No valid speech detected after preprocessing."}), 400
+            return jsonify({"error": "No valid speech detected after processing."}), 400
 
-        # Transcribe each chunk
+        # Step 5: Transcribe each chunk using Google STT
         recognizer = sr.Recognizer()
         transcripts = []
 
@@ -75,6 +79,7 @@ def transcribe_audio():
             finally:
                 os.remove(chunk_path)
 
+        # Step 6: Return full transcript
         final_transcript = " ".join(transcripts).strip()
         return jsonify({"transcript": final_transcript})
 
