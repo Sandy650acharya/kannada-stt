@@ -10,7 +10,7 @@ import scipy.signal
 from pydub import AudioSegment, silence
 
 # CONFIGURATION
-TOTAL_DURATION = 150        # Total recording duration (seconds)
+TOTAL_DURATION = 120  # Total recording duration (seconds)
 SAMPLE_RATE = 16000
 SERVER_URL = "https://kannada-stt.onrender.com/transcribe"
 AUTO_SAVE_TRANSCRIPT = True
@@ -37,6 +37,7 @@ def record_full_audio(duration=TOTAL_DURATION, samplerate=SAMPLE_RATE):
     audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='float32')
     sd.wait()
 
+    # Denoise the audio
     audio = apply_highpass_filter(audio, samplerate)
 
     temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -50,20 +51,21 @@ def chunk_audio_by_silence(audio_path):
 
     primary_chunks = silence.split_on_silence(
         audio,
-        min_silence_len=1000,           # ~1 sec silence
+        min_silence_len=800,            # Better for natural pauses
         silence_thresh=audio.dBFS - 14, # Adaptive threshold
-        keep_silence=300                # Padding for context
+        keep_silence=300                # Context padding
     )
 
     valid_chunks = []
     current = AudioSegment.silent(duration=0)
+    overlap = AudioSegment.silent(duration=500)  # Prevent word skipping
 
     for chunk in primary_chunks:
         if len(chunk) < 1000:
             continue
 
         if len(current) + len(chunk) <= 30000:
-            current += chunk
+            current += chunk + overlap
         else:
             if len(current) > 1000:
                 valid_chunks.append(current)
@@ -85,7 +87,7 @@ def send_chunk_to_server(chunk_audio, chunk_index, language):
     try:
         with open(chunk_path, "rb") as f:
             response = requests.post(
-                f"{SERVER_URL}?lang={language}", 
+                f"{SERVER_URL}?lang={language}",
                 files={"audio": f}
             )
         os.remove(chunk_path)
@@ -106,7 +108,10 @@ def save_transcript(text, filename="full_transcript.txt"):
     with open(filename, "w", encoding="utf-8") as tf:
         tf.write(text)
     print(f"📝 Transcript saved to {filename}")
-    webbrowser.open(f"file://{os.path.abspath(filename)}")
+    try:
+        webbrowser.open(f"file://{os.path.abspath(filename)}")
+    except:
+        print("⚠️ Could not open transcript file in browser.")
 
 if __name__ == "__main__":
     selected_language = choose_language()
