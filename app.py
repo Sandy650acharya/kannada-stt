@@ -4,11 +4,12 @@ import tempfile
 from pydub import AudioSegment, silence
 import os
 
+# Optional punctuation model (English only)
 try:
     from deepsegment import DeepSegment
     segmenter = DeepSegment('en')
 except ImportError:
-    segmenter = None  # DeepSegment only loaded for English
+    segmenter = None  # Fallback if DeepSegment not installed
 
 app = Flask(__name__)
 
@@ -21,6 +22,7 @@ def transcribe_audio():
     if "audio" not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
 
+    # Handle language preference (default: Kannada)
     lang_code = request.args.get("lang", "kn-IN").strip()
     if not lang_code:
         lang_code = "kn-IN"
@@ -30,27 +32,27 @@ def transcribe_audio():
     processed_chunks = []
 
     try:
-        # Step 1: Save uploaded audio temporarily
+        # 1️⃣ Save uploaded audio temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp:
             audio_file.save(temp.name)
             wav_path = temp.name
 
-        # Step 2: Load and normalize audio
+        # 2️⃣ Load and normalize audio
         audio = AudioSegment.from_wav(wav_path).set_channels(1).set_frame_rate(16000)
 
-        # Step 3: Silence-based chunking
+        # 3️⃣ Split based on silence
         primary_chunks = silence.split_on_silence(
             audio,
-            min_silence_len=800,
-            silence_thresh=audio.dBFS - 14,
-            keep_silence=400  # Add context
+            min_silence_len=800,              # Detect natural pauses
+            silence_thresh=audio.dBFS - 14,   # Adaptive threshold
+            keep_silence=400                  # Context padding
         )
 
-        # Step 4: Merge into ~30s chunks with overlap
-        max_chunk_len = 30000  # 30 seconds
-        overlap_ms = 500       # 0.5s overlap to prevent word truncation
-
+        # 4️⃣ Merge chunks with overlap (~30s max each)
+        max_chunk_len = 30000      # 30 sec max
+        overlap_ms = 500           # Add 0.5s overlap to avoid cut words
         current = AudioSegment.silent(duration=0)
+
         for i, chunk in enumerate(primary_chunks):
             if len(chunk) < 1000:
                 continue
@@ -62,7 +64,6 @@ def transcribe_audio():
                     processed_chunks.append(current)
                 current = chunk
 
-            # Add small overlap at end of each segment (except last)
             if i < len(primary_chunks) - 1:
                 current += AudioSegment.silent(duration=overlap_ms)
 
@@ -72,7 +73,7 @@ def transcribe_audio():
         if not processed_chunks:
             return jsonify({"error": "No valid speech detected after processing."}), 400
 
-        # Step 5: Transcribe each chunk
+        # 5️⃣ Transcribe each chunk using Google STT
         recognizer = sr.Recognizer()
         transcripts = []
 
@@ -96,13 +97,15 @@ def transcribe_audio():
             finally:
                 os.remove(chunk_path)
 
-        # Step 6: Join and optionally punctuate
+        # 6️⃣ Combine all and apply punctuation (English only)
         final_transcript = " ".join(transcripts).strip()
 
-        # Add punctuation for English using DeepSegment
         if lang_code.startswith("en") and segmenter:
-            punctuated = segmenter.segment_long(final_transcript)
-            final_transcript = " ".join(punctuated)
+            try:
+                final_transcript = " ".join(segmenter.segment_long(final_transcript))
+            except Exception as e:
+                # Log or fallback gracefully if segmentation fails
+                print(f"[⚠️ DeepSegment error]: {e}")
 
         return jsonify({"transcript": final_transcript})
 

@@ -2,7 +2,6 @@ import requests
 import sounddevice as sd
 import soundfile as sf
 import tempfile
-import time
 import os
 import webbrowser
 import numpy as np
@@ -10,7 +9,7 @@ import scipy.signal
 from pydub import AudioSegment, silence
 
 # CONFIGURATION
-TOTAL_DURATION = 120  # Total recording duration (seconds)
+TOTAL_DURATION = 120  # Max recording time (in seconds)
 SAMPLE_RATE = 16000
 SERVER_URL = "https://kannada-stt.onrender.com/transcribe"
 AUTO_SAVE_TRANSCRIPT = True
@@ -20,50 +19,43 @@ def choose_language():
     print("1. Kannada (Default)")
     print("2. English")
     choice = input("Enter choice (1 or 2): ").strip()
-
-    if choice == "2":
-        return "en-IN"
-    else:
-        return "kn-IN"
+    return "en-IN" if choice == "2" else "kn-IN"
 
 def apply_highpass_filter(audio, samplerate, cutoff=100.0):
-    """Denoise using high-pass filter to remove low-frequency hums."""
+    """Apply a high-pass filter to reduce low-frequency noise."""
     b, a = scipy.signal.butter(1, cutoff / (0.5 * samplerate), btype='high', analog=False)
     filtered_audio = scipy.signal.filtfilt(b, a, audio[:, 0])
     return np.expand_dims(filtered_audio, axis=1)
 
 def record_full_audio(duration=TOTAL_DURATION, samplerate=SAMPLE_RATE):
-    print(f"\n🎙️ Recording full session for {duration} seconds... Speak continuously.")
+    print(f"\n🎙️ Recording for {duration} seconds... Speak clearly.")
     audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='float32')
     sd.wait()
-
-    # Denoise the audio
     audio = apply_highpass_filter(audio, samplerate)
 
     temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     sf.write(temp_wav.name, audio, samplerate)
-    print(f"✅ Full audio saved to {temp_wav.name}")
+    print(f"✅ Audio saved at {temp_wav.name}")
     return temp_wav.name
 
 def chunk_audio_by_silence(audio_path):
-    print("\n🔍 Splitting audio based on silence...")
+    print("\n🔍 Splitting audio using silence detection...")
     audio = AudioSegment.from_wav(audio_path).set_channels(1).set_frame_rate(16000)
 
     primary_chunks = silence.split_on_silence(
         audio,
-        min_silence_len=800,            # Better for natural pauses
-        silence_thresh=audio.dBFS - 14, # Adaptive threshold
-        keep_silence=300                # Context padding
+        min_silence_len=800,
+        silence_thresh=audio.dBFS - 14,
+        keep_silence=300
     )
 
     valid_chunks = []
     current = AudioSegment.silent(duration=0)
-    overlap = AudioSegment.silent(duration=500)  # Prevent word skipping
+    overlap = AudioSegment.silent(duration=500)  # 0.5s overlap to prevent loss
 
     for chunk in primary_chunks:
         if len(chunk) < 1000:
             continue
-
         if len(current) + len(chunk) <= 30000:
             current += chunk + overlap
         else:
@@ -74,7 +66,7 @@ def chunk_audio_by_silence(audio_path):
     if len(current) > 1000:
         valid_chunks.append(current)
 
-    print(f"✅ Total valid chunks: {len(valid_chunks)}")
+    print(f"✅ Created {len(valid_chunks)} valid chunks.")
     return valid_chunks
 
 def send_chunk_to_server(chunk_audio, chunk_index, language):
@@ -105,13 +97,13 @@ def send_chunk_to_server(chunk_audio, chunk_index, language):
         return ""
 
 def save_transcript(text, filename="full_transcript.txt"):
-    with open(filename, "w", encoding="utf-8") as tf:
-        tf.write(text)
-    print(f"📝 Transcript saved to {filename}")
     try:
+        with open(filename, "w", encoding="utf-8") as tf:
+            tf.write(text)
+        print(f"📝 Transcript saved to {filename}")
         webbrowser.open(f"file://{os.path.abspath(filename)}")
-    except:
-        print("⚠️ Could not open transcript file in browser.")
+    except Exception as e:
+        print(f"⚠️ Could not save/open transcript: {e}")
 
 if __name__ == "__main__":
     selected_language = choose_language()
