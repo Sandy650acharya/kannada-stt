@@ -8,12 +8,17 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "✅ Kannada STT API is running!"
+    return "✅ Multilingual STT API is running!"
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe_audio():
     if "audio" not in request.files:
         return jsonify({"error": "No audio file provided"}), 400
+
+    # Language parameter (default to Kannada)
+    lang_code = request.args.get("lang", "kn-IN").strip()
+    if not lang_code:
+        lang_code = "kn-IN"
 
     audio_file = request.files["audio"]
     wav_path = None
@@ -28,19 +33,19 @@ def transcribe_audio():
         # Step 2: Load and normalize audio
         audio = AudioSegment.from_wav(wav_path).set_channels(1).set_frame_rate(16000)
 
-        # Step 3: Split on silence
+        # Step 3: Silence-based chunking
         primary_chunks = silence.split_on_silence(
             audio,
-            min_silence_len=800,            # Lower to catch more natural pauses
+            min_silence_len=800,            # Short pause detection
             silence_thresh=audio.dBFS - 14, # Adaptive threshold
-            keep_silence=300                # Add some context padding
+            keep_silence=300                # Context padding
         )
 
-        # Step 4: Merge small chunks into larger ones (~20-30s target)
+        # Step 4: Merge chunks to ~20–30s max
         current = AudioSegment.silent(duration=0)
         for chunk in primary_chunks:
             if len(chunk) < 1000:
-                continue  # skip tiny noises
+                continue
 
             if len(current) + len(chunk) <= 30000:
                 current += chunk
@@ -55,7 +60,7 @@ def transcribe_audio():
         if not processed_chunks:
             return jsonify({"error": "No valid speech detected after processing."}), 400
 
-        # Step 5: Transcribe each chunk using Google STT
+        # Step 5: Transcribe each chunk
         recognizer = sr.Recognizer()
         transcripts = []
 
@@ -69,7 +74,7 @@ def transcribe_audio():
                     recognizer.adjust_for_ambient_noise(source, duration=0.2)
                     audio_data = recognizer.record(source)
 
-                text = recognizer.recognize_google(audio_data, language="kn-IN")
+                text = recognizer.recognize_google(audio_data, language=lang_code)
                 transcripts.append(text)
 
             except sr.UnknownValueError:
@@ -79,7 +84,6 @@ def transcribe_audio():
             finally:
                 os.remove(chunk_path)
 
-        # Step 6: Return full transcript
         final_transcript = " ".join(transcripts).strip()
         return jsonify({"transcript": final_transcript})
 

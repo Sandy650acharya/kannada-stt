@@ -10,10 +10,21 @@ import scipy.signal
 from pydub import AudioSegment, silence
 
 # CONFIGURATION
-TOTAL_DURATION = 60        # Total recording duration (seconds)
+TOTAL_DURATION = 150        # Total recording duration (seconds)
 SAMPLE_RATE = 16000
 SERVER_URL = "https://kannada-stt.onrender.com/transcribe"
 AUTO_SAVE_TRANSCRIPT = True
+
+def choose_language():
+    print("\n🌐 Choose Language for Transcription:")
+    print("1. Kannada (Default)")
+    print("2. English")
+    choice = input("Enter choice (1 or 2): ").strip()
+
+    if choice == "2":
+        return "en-IN"
+    else:
+        return "kn-IN"
 
 def apply_highpass_filter(audio, samplerate, cutoff=100.0):
     """Denoise using high-pass filter to remove low-frequency hums."""
@@ -22,7 +33,7 @@ def apply_highpass_filter(audio, samplerate, cutoff=100.0):
     return np.expand_dims(filtered_audio, axis=1)
 
 def record_full_audio(duration=TOTAL_DURATION, samplerate=SAMPLE_RATE):
-    print(f"🎙️ Recording full session for {duration} seconds... Speak continuously.")
+    print(f"\n🎙️ Recording full session for {duration} seconds... Speak continuously.")
     audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='float32')
     sd.wait()
 
@@ -34,7 +45,7 @@ def record_full_audio(duration=TOTAL_DURATION, samplerate=SAMPLE_RATE):
     return temp_wav.name
 
 def chunk_audio_by_silence(audio_path):
-    print("🔍 Splitting audio based on silence...")
+    print("\n🔍 Splitting audio based on silence...")
     audio = AudioSegment.from_wav(audio_path).set_channels(1).set_frame_rate(16000)
 
     primary_chunks = silence.split_on_silence(
@@ -44,7 +55,6 @@ def chunk_audio_by_silence(audio_path):
         keep_silence=300                # Padding for context
     )
 
-    # Merge small chunks and avoid >30s overflow
     valid_chunks = []
     current = AudioSegment.silent(duration=0)
 
@@ -65,7 +75,7 @@ def chunk_audio_by_silence(audio_path):
     print(f"✅ Total valid chunks: {len(valid_chunks)}")
     return valid_chunks
 
-def send_chunk_to_server(chunk_audio, chunk_index):
+def send_chunk_to_server(chunk_audio, chunk_index, language):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as chunk_file:
         chunk_audio.export(chunk_file.name, format="wav")
         chunk_path = chunk_file.name
@@ -74,7 +84,10 @@ def send_chunk_to_server(chunk_audio, chunk_index):
 
     try:
         with open(chunk_path, "rb") as f:
-            response = requests.post(SERVER_URL, files={"audio": f})
+            response = requests.post(
+                f"{SERVER_URL}?lang={language}", 
+                files={"audio": f}
+            )
         os.remove(chunk_path)
 
         if response.ok:
@@ -96,12 +109,13 @@ def save_transcript(text, filename="full_transcript.txt"):
     webbrowser.open(f"file://{os.path.abspath(filename)}")
 
 if __name__ == "__main__":
+    selected_language = choose_language()
     audio_path = record_full_audio()
     chunks = chunk_audio_by_silence(audio_path)
 
     all_transcripts = []
     for idx, chunk in enumerate(chunks, 1):
-        transcript = send_chunk_to_server(chunk, idx)
+        transcript = send_chunk_to_server(chunk, idx, selected_language)
         if transcript:
             all_transcripts.append(transcript)
 
